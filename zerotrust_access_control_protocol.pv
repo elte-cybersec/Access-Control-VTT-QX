@@ -1,0 +1,96 @@
+(*
+Zero Trust Access Control Model for VTT QX Quantum Computing Platform
+*)
+
+(* Primitive Types *)
+type user.
+type project.
+type device.
+type token.
+type resource.
+type attribute.
+type context.
+type decision.
+type authlevel.
+
+(* Authentication Levels *)
+const NotAuthenticated: authlevel.
+const PartialAuthenticated: authlevel.
+const FullyAuthenticated: authlevel.
+
+(* Constants *)
+const Granted: decision.
+const Denied: decision.
+
+(* Abstract Functions *)
+fun createAuthContext(user, project, device, token): context.
+fun evaluateAuthLevel(context): authlevel.
+fun checkPermission(user, project, device, resource): decision.
+
+(* Channels *)
+free c: channel.
+
+(* Security Events *)
+event AccessRequested(user, resource, context).
+event AccessVerificationStarted(user, resource, context).
+event AuthLevelDetermined(user, context, authlevel).
+event AttributesCollected(user, context).
+event PolicyEvaluated(user, resource, context, decision).
+event AccessGranted(user, resource, context).
+event AccessDenied(user, resource, context).
+
+(* Security Predicates *)
+pred userInProject(user, project).
+pred deviceInProject(device, project).
+pred tokenValid(token).
+pred tokenForProject(token, project).
+
+(* Security Queries *)
+query u: user, r: resource, ctx: context;
+  event(AccessGranted(u, r, ctx)) ==> 
+    (event(AuthLevelDetermined(u, ctx, FullyAuthenticated)) && 
+     event(PolicyEvaluated(u, r, ctx, Granted))).
+
+query u: user, r: resource, ctx: context;
+  event(AccessDenied(u, r, ctx)) ==> 
+    (event(AuthLevelDetermined(u, ctx, NotAuthenticated)) || 
+     event(PolicyEvaluated(u, r, ctx, Denied))).
+
+(* Zero Trust Access Control Process *)
+let accessResource(u: user, p: project, d: device, t: token, r: resource) =
+  let ctx = createAuthContext(u, p, d, t) in
+  event AccessRequested(u, r, ctx);
+  event AccessVerificationStarted(u, r, ctx);
+  
+  let authLevel = evaluateAuthLevel(ctx) in
+  event AuthLevelDetermined(u, ctx, authLevel);
+  
+  if authLevel = FullyAuthenticated then
+    event AttributesCollected(u, ctx);
+    let decision = checkPermission(u, p, d, r) in
+    event PolicyEvaluated(u, r, ctx, decision);
+    
+    if decision = Granted then
+      event AccessGranted(u, r, ctx)
+    else
+      event AccessDenied(u, r, ctx)
+  else
+    event AccessDenied(u, r, ctx).
+
+(* Main Process *)
+process
+  new u1: user; 
+  new u2: user;
+  new p1: project; 
+  new p2: project;
+  new d1: device;
+  new t1: token; 
+  new t2: token;
+  new r1: resource; 
+  new r2: resource;
+
+  (
+    !accessResource(u1, p1, d1, t1, r1) |
+    !accessResource(u1, p2, d1, t1, r2) |
+    !accessResource(u2, p1, d1, t2, r1)
+  )

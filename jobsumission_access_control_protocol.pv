@@ -1,0 +1,131 @@
+(* Job Submission and Access Control Protocol for VTT QX
+ * Based on jobs.py
+ *)
+
+(* Types *)
+type user.
+type project.
+type device.
+type token.
+type job.
+type jobStatus.
+
+(* Constants *)
+const PENDING_COMPILATION: jobStatus.
+const PENDING_EXECUTION: jobStatus.
+const READY: jobStatus.
+const FAILED: jobStatus.
+const ABORTED: jobStatus.
+const staff: user.
+
+(* Tables for storing relationships *)
+table jobOwnerTable(job, user).
+table jobDeviceTable(job, device).
+table jobProjectTable(job, project).
+table deviceQueueTable(device, nat).
+table projectQueueTable(project, nat).
+table maxDeviceQueueTable(device, nat).
+table maxProjectQueueTable(project, nat).
+table projectQuotaTable(project, nat).
+table projectDeviceUsageTable(project, device, nat).
+
+(* Channels *)
+free c: channel.
+free private_c: channel [private].
+
+(* Events *)
+event JobSubmissionRequested(user, project, device).
+event JobSubmissionAccepted(user, project, device, job).
+event JobSubmissionRejected(user, project, device).
+event JobAccessRequested(user, job).
+event JobAccessGranted(user, job).
+event JobAccessDenied(user, job).
+event JobAbortRequested(user, job).
+event JobAbortCompleted(user, job).
+event JobAbortDenied(user, job).
+
+(* Security queries *)
+query u: user, p: project, d: device, j: job;
+  event(JobSubmissionAccepted(u, p, d, j)).
+
+query u: user, j: job;
+  event(JobAccessGranted(u, j)) ==> event(JobAccessRequested(u, j)).
+
+query u: user, j: job;
+  event(JobAbortCompleted(u, j)) ==> event(JobAbortRequested(u, j)).
+
+(* Protocol modeling *)
+
+(* Job submission protocol *)
+let submitJob(u: user, p: project, d: device) =
+  event JobSubmissionRequested(u, p, d);
+  
+  (* Check quota and queue conditions *)
+  get projectQuotaTable(=p, pq) in
+  get projectDeviceUsageTable(=p, =d, usage) in
+  get deviceQueueTable(=d, ql) in
+  get maxDeviceQueueTable(=d, max_ql) in
+  get projectQueueTable(=p, pql) in
+  get maxProjectQueueTable(=p, max_pql) in
+  
+  (* Check if usage is within quota and queues are not full *)
+  if usage < pq && ql < max_ql && pql < max_pql then
+    new j: job;
+    insert jobOwnerTable(j, u);
+    insert jobDeviceTable(j, d);
+    insert jobProjectTable(j, p);
+    event JobSubmissionAccepted(u, p, d, j);
+    out(c, j)
+  else
+    event JobSubmissionRejected(u, p, d).
+
+(* Job access protocol *)
+let accessJob(u: user) =
+  in(c, j: job);
+  event JobAccessRequested(u, j);
+  get jobOwnerTable(=j, owner) in
+  if (u = owner) || (u = staff) then
+    event JobAccessGranted(u, j);
+    (* Return job data *)
+    get jobProjectTable(=j, jp) in
+    out(c, (j, READY))
+  else
+    event JobAccessDenied(u, j).
+
+(* Job abort protocol *)
+let abortJob(u: user) =
+  in(c, j: job);
+  event JobAbortRequested(u, j);
+  get jobOwnerTable(=j, owner) in
+  if (u = owner) || (u = staff) then
+    (* Perform abort operation *)
+    event JobAbortCompleted(u, j);
+    out(c, (j, ABORTED))
+  else
+    event JobAbortDenied(u, j).
+
+(* Main process *)
+process
+  (* Create users, projects, and devices *)
+  new user1: user;
+  new user2: user;
+  new project1: project;
+  new device1: device;
+  
+  (* Initialize tables with specific values - using constants for clarity *)
+  (* Usage < Quota, current queue < max queue to allow job submission *)
+  insert projectQuotaTable(project1, 100);
+  insert projectDeviceUsageTable(project1, device1, 50);
+  insert deviceQueueTable(device1, 5);
+  insert maxDeviceQueueTable(device1, 10);
+  insert projectQueueTable(project1, 3);
+  insert maxProjectQueueTable(project1, 5);
+  
+  (* Submit and access jobs *)
+  (
+    submitJob(user1, project1, device1) |
+    accessJob(user1) |
+    accessJob(user2) |  (* Different user trying to access *)
+    abortJob(user1) |
+    abortJob(user2)     (* Different user trying to abort *)
+  )

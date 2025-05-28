@@ -1,0 +1,70 @@
+(* Project Token Authentication Protocol for VTT QX
+ * Based on ProjectTokenAuthentication and token.py
+ *)
+
+(* Types and constants *)
+type user.
+type project.
+type token.
+type timestamp.
+
+(* Functions *)
+fun create_token(user, project, timestamp): token.
+fun token_expiry(token): timestamp.
+fun timestamp_now(): timestamp.
+
+(* Predicates - using pred instead of bool function *)
+pred timestamp_lt(timestamp, timestamp).
+
+(* Channels *)
+free c: channel.
+
+(* Events to verify authentication properties *)
+event UserAuthenticated(user, token).
+event ProjectAssociated(user, project, token).
+event TokenCreated(user, project, token, timestamp).
+event TokenUsed(user, project, token).
+
+(* Keys and secrets *)
+free token_secret: bitstring [private].
+
+(* Authentication queries *)
+query u:user, p:project, t:token, ts:timestamp; 
+    event(TokenUsed(u, p, t)) ==> event(TokenCreated(u, p, t, ts)).
+
+(* Protocol modeling *)
+
+(* Token Creation Process *)
+let createProjectToken(u: user, p: project) =
+    let ts = timestamp_now() in
+    let t = create_token(u, p, ts) in
+    event TokenCreated(u, p, t, ts);
+    out(c, t).
+
+(* Token Authentication Process *)
+let authenticateWithToken(u: user, p: project) =
+    in(c, t: token);
+    let expiry = token_expiry(t) in
+    (* Use if-statement with predicate directly *)
+    if timestamp_lt(timestamp_now(), expiry) then
+    (
+        event UserAuthenticated(u, t);
+        event ProjectAssociated(u, p, t);
+        event TokenUsed(u, p, t)
+    ).
+
+(* Main process *)
+process
+    (* Create some users and projects *)
+    new user1: user;
+    new user2: user;
+    new project1: project;
+    new project2: project;
+    
+    (* Execute the protocol *)
+    (
+        createProjectToken(user1, project1) |
+        createProjectToken(user2, project2) |
+        authenticateWithToken(user1, project1) |
+        authenticateWithToken(user2, project1)  (* Intentional mismatch to test security *)
+    )

@@ -1,0 +1,117 @@
+(* Device Access Control Protocol for VTT QX
+ * Based on resources.py and projects.py
+ *)
+
+(* Types *)
+type user.
+type project.
+type device.
+type token.
+type status.
+
+(* Constants *)
+const OFFLINE: status.
+const ONLINE: status.
+const APPROVED: status.
+const PENDING: status.
+const CLOSED: status.
+
+(* Channel for communication *)
+free c: channel.
+
+(* Tables for storing relationships and states *)
+table userProjects(user, project).
+table projectAdmin(user, project).
+table deviceProjects(device, project).
+table deviceStatus(device, status).
+table projectStatus(project, status).
+table projectToken(user, project, token).
+
+(* Events for verification *)
+event DeviceAccessGranted(user, device).
+event DeviceAccessDenied(user, device).
+event JobSubmissionAllowed(user, device, project).
+event JobSubmissionDenied(user, device, project).
+event TokenGenerated(user, project, token).
+event TokenVerified(user, project, token).
+
+(* Basic security queries *)
+query x: user, y: device; event(DeviceAccessGranted(x, y)).
+query x: user, y: device, z: project; event(JobSubmissionAllowed(x, y, z)).
+
+(* Process for verifying device access *)
+let verifyDeviceAccess(u: user, d: device) =
+  (* First get the device status *)
+  get deviceStatus(=d, s) in
+  if s <> OFFLINE then (
+    (* Check if user has a project with access to this device *)
+    get userProjects(=u, p) in
+    get deviceProjects(=d, =p) in
+    event DeviceAccessGranted(u, d)
+  ) else (
+    event DeviceAccessDenied(u, d)
+  ).
+
+(* Process for verifying job submission *)
+let verifyJobSubmission(u: user, d: device, p: project) =
+  (* First check project status *)
+  get projectStatus(=p, ps) in
+  if ps = APPROVED then (
+    (* Then check device status *)
+    get deviceStatus(=d, ds) in
+    if ds <> OFFLINE then (
+      (* Verify user belongs to project and project has access to device *)
+      get userProjects(=u, =p) in
+      get deviceProjects(=d, =p) in
+      event JobSubmissionAllowed(u, d, p)
+    ) else (
+      event JobSubmissionDenied(u, d, p)
+    )
+  ) else (
+    event JobSubmissionDenied(u, d, p)
+  ).
+
+(* Process for token generation *)
+let generateToken(u: user, p: project) =
+  (* Check if user is admin of project *)
+  get projectAdmin(=u, =p) in
+  new t: token;
+  insert projectToken(u, p, t);
+  event TokenGenerated(u, p, t);
+  out(c, t).
+
+(* Process for token verification *)
+let verifyToken(u: user, p: project, t: token) =
+  get projectToken(=u, =p, =t) in
+  event TokenVerified(u, p, t).
+
+(* Main process *)
+process
+  (* Create entities *)
+  new alice: user;
+  new bob: user;
+  new device1: device;
+  new device2: device;
+  new project1: project;
+  new project2: project;
+  
+  (* Setup state in tables *)
+  insert userProjects(alice, project1);
+  insert userProjects(bob, project2);
+  insert projectAdmin(alice, project1);
+  insert deviceProjects(device1, project1);
+  insert deviceProjects(device2, project2);
+  insert deviceStatus(device1, ONLINE);
+  insert deviceStatus(device2, OFFLINE);
+  insert projectStatus(project1, APPROVED);
+  insert projectStatus(project2, PENDING);
+  
+  (* Run verification processes *)
+  (
+    verifyDeviceAccess(alice, device1) |
+    verifyDeviceAccess(alice, device2) |
+    verifyDeviceAccess(bob, device1) |
+    verifyJobSubmission(alice, device1, project1) |
+    verifyJobSubmission(bob, device2, project2) |
+    generateToken(alice, project1)
+  )

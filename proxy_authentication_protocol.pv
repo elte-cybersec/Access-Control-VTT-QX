@@ -1,0 +1,149 @@
+(* VTT QX Platform Proxy Authentication Protocol
+ * Based on the DeviceProxyView class in proxy.py
+ *)
+
+(* Types *)
+type user.
+type device.
+type device_id.
+type token.
+type url.
+type response.
+type timestamp.
+
+(* Constants *)
+const NONE: token.
+
+(* Tables *)
+table token_cache(device_id, token, timestamp).
+
+(* Functions for system modeling *)
+fun device_to_id(device): device_id.
+fun device_url(device): url.
+fun create_token(device_id): token.
+fun token_expiry(token): timestamp.
+fun timestamp_now(): timestamp.
+fun combine_url(url, url): url.
+fun create_response(token): response.
+
+(* Predicate for timestamp comparison *)
+pred timestamp_lt(timestamp, timestamp).
+
+(* Channels *)
+free c: channel.
+free auth_c: channel [private].
+free server_c: channel [private].
+free token_c: channel.
+
+(* Events for security verification *)
+event CacheCheck(device_id).
+event TokenInCache(device_id, token, timestamp).
+event CacheHit(device_id, token).
+event CacheMiss(device_id).
+event AuthRequest(device_id).
+event AuthSuccess(device_id, token).
+event AuthError(device_id).
+event RequestForwarded(user, device, url, token).
+event DeviceTokenMap(device, device_id, token).
+event ResponseReceived(user, device, response).
+
+(* Token retrieval - based on get_access_token method *)
+let get_token(d: device) =
+  let d_id = device_to_id(d) in
+
+  (* Check token cache first *)
+  event CacheCheck(d_id);
+  get token_cache(=d_id, cached_tok, expiry) in
+    event TokenInCache(d_id, cached_tok, expiry);
+    (* If cached token still valid *)
+    if timestamp_lt(timestamp_now(), expiry) then
+      event CacheHit(d_id, cached_tok);
+      out(token_c, cached_tok)
+    else
+      (* Token expired: request a fresh one *)
+      event CacheMiss(d_id);
+      event AuthRequest(d_id);
+      out(auth_c, d_id);
+      in(auth_c, tok_exp: token);
+      if tok_exp <> NONE then
+        let new_expiry = token_expiry(tok_exp) in
+        insert token_cache(d_id, tok_exp, new_expiry);
+        event AuthSuccess(d_id, tok_exp);
+        out(token_c, tok_exp)
+      else
+        event AuthError(d_id);
+        out(token_c, NONE)
+  else
+    (* No cached token: request a fresh one *)
+    event CacheMiss(d_id);
+    event AuthRequest(d_id);
+    out(auth_c, d_id);
+    in(auth_c, tok_nc: token);
+    if tok_nc <> NONE then
+      let new_expiry = token_expiry(tok_nc) in
+      insert token_cache(d_id, tok_nc, new_expiry);
+      event AuthSuccess(d_id, tok_nc);
+      out(token_c, tok_nc)
+    else
+      event AuthError(d_id);
+      out(token_c, NONE).
+
+(* Proxy request - based on proxy_request method *)
+let proxy_request(u: user, d: device, path: url) =
+  (* Ask for token *)
+  out(c, d);
+  in(token_c, tok: token);
+
+  if tok <> NONE then
+    (* Build and forward request *)
+    let base = device_url(d) in
+    let full = combine_url(base, path) in
+    event RequestForwarded(u, d, full, tok);
+    event DeviceTokenMap(d, device_to_id(d), tok);
+    out(server_c, d);
+    out(server_c, tok);
+    in(server_c, resp: response);
+    event ResponseReceived(u, d, resp);
+    out(c, resp)
+  else
+    (* Auth failed *)
+    out(c, NONE).
+
+(* Auth server - simplified *)
+let auth_server() =
+  in(auth_c, dev_id: device_id);
+  let tok = create_token(dev_id) in
+  out(auth_c, tok).
+
+(* Device server - simplified *)
+let device_server() =
+  in(server_c, d: device);
+  in(server_c, t: token);
+  let resp = create_response(t) in
+  out(server_c, resp).
+
+(* Security queries *)
+query d_id: device_id, t: token;
+  event(CacheHit(d_id, t)) ==> event(TokenInCache(d_id, t, timestamp_now())).
+
+query d_id: device_id, t: token;
+  event(AuthSuccess(d_id, t)) ==> event(AuthRequest(d_id)).
+
+query u: user, d: device, p: url, t: token;
+  event(RequestForwarded(u, d, p, t)) ==> 
+    (event(CacheHit(device_to_id(d), t)) || event(AuthSuccess(device_to_id(d), t))).
+
+query u: user, d: device, r: response, p: url, t: token;
+  event(ResponseReceived(u, d, r)) ==> event(RequestForwarded(u, d, p, t)).
+
+(* Main process *)
+process
+  new user1: user;
+  new device1: device;
+  new path1: url;
+  (
+    !auth_server() |
+    !device_server() |
+    !get_token(device1) |
+    !proxy_request(user1, device1, path1)
+  )
