@@ -1,6 +1,5 @@
 (* Device Access Control Protocol for VTT QX
- * Based on resources.py and projects.py
- *)
+*)
 
 (* Types *)
 type user.

@@ -1,5 +1,4 @@
 (* VTT QX Platform Proxy Authentication Protocol
- * Based on the DeviceProxyView class in proxy.py
  *)
 
 (* Types *)

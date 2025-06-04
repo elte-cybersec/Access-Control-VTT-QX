@@ -1,6 +1,5 @@
 (* Job Submission and Access Control Protocol for VTT QX
- * Based on jobs.py
- *)
+*)
 
 (* Types *)
 type user.

@@ -1,6 +1,5 @@
 (* Project Token Authentication Protocol for VTT QX
- * Based on ProjectTokenAuthentication and token.py
- *)
+*)
 
 (* Types and constants *)
 type user.
